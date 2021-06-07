@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include "parse.h"
 
+/*
+
 int main(int argc, char **argv){
   //Read from the file the sample
   int fd_in = open(argv[1], O_RDONLY);
@@ -31,3 +33,5 @@ int main(int argc, char **argv){
   free(request);
   return 0;
 }
+
+*/
