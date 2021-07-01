@@ -10,4 +10,6 @@ An individual project, developing a web server in C. For my University's Princip
     * Attempt at Web Server
         * Implemented connection to socket
         * Implemented GET
-    * No where near finish... (Sorry...)
+    
+* __Version 0.2.0 - Milestone 2__
+    * Concurrent Requests
