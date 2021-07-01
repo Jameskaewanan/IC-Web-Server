@@ -1,129 +1,195 @@
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <getopt.h>
+#include "parse.h"
 #include "connection.h"
 
-#define MAXBUF 8192
+#define MAXBUF 4096
+#define MAX_HEADER_BUF 8192
 
-int main (int argc, char* argv[]) {
-
+char rootFolder[MAXBUF];
+char listenPort[MAXBUF];
 typedef struct sockaddr SA;
 
-void write_logic(int connFd, int outputFd)
-{
-    ssize_t bytesRead;
+void respond_all(int connFd, char *uri, char *mime, char* method) {
+
     char buf[MAXBUF];
 
-    while ((bytesRead = read(connFd, buf, MAXBUF)) > 0)
-    {
-        ssize_t numToWrite = bytesRead;
-        char *writeBuf = buf;
-        while (numToWrite > 0)
-        {
-            ssize_t numWritten = write(outputFd, writeBuf, numToWrite);
-            if (numWritten < 0)
-            {
-                fprintf(stderr, "ERROR writing, meh\n");
-                break;
-            }
-            numToWrite -= numWritten;
-            writeBuf += numWritten;
-        }
-    }
-    printf("DEBUG: Connection closed\n");
-}
-void respond_all(int connFd, char *uri, char *mime)
-{
-    char buf[MAXBUF];
-    int uriFd = open(uri, O_RDONLY);
-    char *msg = "404 Not Found";
-    if (uriFd < 0)
-    {
+    if ((strcasecmp(method, "GET") != 0) && strcasecmp(method, "HEAD") != 0) {
         sprintf(buf,
-                "HTTP/1.1 404 Not Found\r\n"
-                "Server: Micro\r\n"
-                "Connection: close\r\n\r\n");
+                "HTTP/1.1 501 Method Unimplemented\r\n"
+                "Server: ICWS\r\n"
+                "Connection: closed\r\n\r\n");
+
         write_all(connFd, buf, strlen(buf));
-        write_all(connFd, msg, strlen(msg));
-        return;
     }
-    struct stat fstatbuf;
-    fstat(uriFd, &fstatbuf);
-    sprintf(buf,
-            "HTTP/1.1 200 OK\r\n"
-            "Server: Micro\r\n"
-            "Connection: close\r\n"
-            "Content-length: %lu\r\n"
-            "Content-type: %s\r\n\r\n",
-            fstatbuf.st_size, mime);
-    write_all(connFd, buf, strlen(buf));
-    write_logic(uriFd, connFd);
+
+    else {
+
+        int uriFd = open(uri, O_RDONLY);
+
+        if (uriFd < 0) {
+            sprintf(buf,
+                    "HTTP/1.1 404 File Not Found\r\n"
+                    "Server: ICWS\r\n"
+                    "Connection: closed\r\n\r\n");
+
+            write_all(connFd, buf, strlen(buf));
+            return;
+        }
+
+        struct stat fstatbuf;
+        fstat(uriFd, &fstatbuf);
+        sprintf(buf,
+                "HTTP/1.1 200 OK\r\n"
+                "Server: ICWS\r\n"
+                "Connection: closed\r\n"
+                "Content-length: %lu\r\n"
+                "Content-type: %s\r\n\r\n",
+                fstatbuf.st_size, mime);
+
+        write_all(connFd, buf, strlen(buf));
+
+        if (strcasecmp(method, "GET") == 0) {
+            ssize_t count ;
+
+            while ((count = read(uriFd, buf, MAXBUF)) > 0)
+                write_all(connFd, buf, count);
+        }
+
+        close(uriFd);
+
+    }
+
 }
 
-void serve_http(int connFd, char *rootFolder)
-{
-    char buf[MAXBUF];
+ssize_t getBuffer(int connFd, char* buf) {
+    int count = 0;
+    int numRead;
+    char eof_limiter[] = {'\r','\n'};
+    int eof_pointer = 0;
+    char *bufp = buf;
+    printf("Accepting Requests...\n");
+    while(count <= MAX_HEADER_BUF) {
 
-
-    if (!read_line(connFd, buf, MAXBUF))
-        return; /* Quit if we can't read the first line */
-    /* [METHOD] [URI] [HTTPVER] */
-    char method[MAXBUF], uri[MAXBUF], httpVer[MAXBUF];
-    sscanf(buf, "%s %s %s", method, uri, httpVer);
-    char newPath[80];
-    if (strcasecmp(method, "GET") == 0)
-    {
-        if (uri[0] == '/')
-        {
-            sprintf(newPath, "%s%s", rootFolder, uri);
-            if (strstr(uri, "html") != NULL)
-            {
-                respond_all(connFd, newPath, "text/html");
-            }
-            else if (strstr(uri, "jpg") != NULL || strstr(uri, "jpeg") != NULL)
-            {
-                respond_all(connFd, newPath, "image/jpeg");
+        if((numRead = read(connFd, bufp, 1)) > 0) {
+            count += numRead;
+            if(count > MAX_HEADER_BUF) return -1;
+            bufp += numRead;
+            if(eof_limiter[eof_pointer % 2] == buf[count-1]) {
+                if(++eof_pointer == 4)
+                    break;
             }
             else
-            {
-                respond_all(connFd, newPath, NULL);
-            }
+                eof_pointer = 0;
+        }
+        else if(numRead == 0) {
+            printf("Client terminate connection...\n");
+            break;
+        }
+        else {
+            printf("Ops error..\n");
+            return -1;
         }
     }
+    bufp = '\0';
+    return count;
+}
+
+void serve_http(int connFd, char* rootFolder) {
+
+    char buf[MAXBUF+666];
+    char* ext;
+
+    ssize_t requestBuffer = getBuffer(connFd, buf);
+
+    Request *request;
+
+    if(requestBuffer > 0)
+        request = parse(buf, requestBuffer, connFd);
+
+    char dir[MAXBUF];
+    char* method = request->http_method;
+    char* uri = request->http_uri;
+
+    strcpy(dir, rootFolder);
+    strcat(dir, uri);
+
+    ext = strrchr(dir, '.');
+    ext++;
+
+    char *mimeType;
+
+    if (strcmp(ext,"html") == 0)
+        mimeType = "text/html";
+    else if (strcmp(ext,"css") == 0)
+        mimeType = "text/css";
+    else if (strcmp(ext,"plain") == 0)
+        mimeType = "text/plain";
+    else if (strcmp(ext,"js") == 0)
+        mimeType = "text/javascript";
+    else if (strcmp(ext,"png") == 0)
+        mimeType = "image/png";
+    else if (strcmp(ext,"gif") == 0)
+        mimeType = "image/gif";
+    else if (strcmp(ext,"jpg") == 0 || strcmp(ext,"jpeg") == 0)
+        mimeType = "image/jpg";
     else
-    {
-        // respond_all(connFd, newPath, NULL);
-        printf("LOG: Unknown request\n");
+        mimeType = "";
+
+    respond_all(connFd, dir, mimeType, method);
+}
+
+void getParameters(int argc, char** argv) {
+    int check;
+
+    static struct option long_options[] = {
+    {"port", required_argument, NULL, 'p'},
+    {"root", required_argument, NULL, 'r'},
+    {NULL, 0, NULL, 0}};
+
+    while ((check = getopt_long(argc, argv, "p:r:", long_options, NULL)) != -1) {
+        switch (check) {
+            case 'p':
+                printf("port: %s\n", optarg);
+                strcpy(listenPort, optarg);
+                break;
+            case 'r':
+                printf("root: %s\n", optarg);
+                strcpy(rootFolder, optarg);
+                break;
+        }
     }
 }
 
-int main(int argc, char *argv[])
-{
-    int listenFd = open_listenfd(argv[2]);
-    char *rootFolder = argv[4];
 
-    for (;;)
-    {
+int main_loop() {
+
+    int listenFd = open_listenfd(listenPort);
+    printf("Initialising Server...\n");
+
+    for (;;) {
         struct sockaddr_storage clientAddr;
         socklen_t clientLen = sizeof(struct sockaddr_storage);
 
         int connFd = accept(listenFd, (SA *)&clientAddr, &clientLen);
-        printf("connFd: %d", connFd);
-        if (connFd < 0)
-        {
+        printf("connFd: %d\n", connFd);
+
+        if (connFd < 0) {
             fprintf(stderr, "Failed to accept\n");
             continue;
         }
 
         char hostBuf[MAXBUF], svcBuf[MAXBUF];
-        if (getnameinfo((SA *)&clientAddr, clientLen,
-                        hostBuf, MAXBUF, svcBuf, MAXBUF, 0) == 0)
+
+        if (getnameinfo((SA *)&clientAddr, clientLen, hostBuf, MAXBUF, svcBuf, MAXBUF, 0) == 0)
             printf("Connection from %s:%s\n", hostBuf, svcBuf);
         else
             printf("Connection from ?UNKNOWN?\n");
@@ -131,10 +197,10 @@ int main(int argc, char *argv[])
         serve_http(connFd, rootFolder);
         close(connFd);
     }
-
-    return 0;
 }
 
-
-
+int main(int argc, char **argv) {
+    getParameters(argc, argv);
+    main_loop();
+    return 0;
 }

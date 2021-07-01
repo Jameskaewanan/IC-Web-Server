@@ -60,7 +60,6 @@ int open_clientfd(char *hostname, char *port) {
     struct addrinfo* listp;
 
     memset(&hints, 0, sizeof(struct addrinfo));
-    /* Look to accept connect on any IP addr using this port no */
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV;
     int retCode = getaddrinfo(hostname, port, &hints, &listp);
@@ -74,19 +73,18 @@ int open_clientfd(char *hostname, char *port) {
     struct addrinfo *p;
     for (p=listp; p!=NULL; p = p->ai_next) {
         if ((clientFd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) < 0)
-            continue; /* This option doesn't work; try next */
+            continue;
 
-        /* Try connecting */
         if (connect(clientFd, p->ai_addr, p->ai_addrlen) != -1)
-            break; /* Yay, success */
+            break;
 
-        close(clientFd); /* Bind failed, close this, then next */
+        close(clientFd);
     }
 
     freeaddrinfo(listp);
 
     if (!p)
-        return -1; /* None of them worked. Meh */
+        return -1;
 
     return clientFd;
 }
@@ -100,22 +98,4 @@ void write_all(int connFd, char *buf, size_t len) {
         toWrite -= numWritten;
         buf += numWritten;
     }
-}
-
-/* Bad, slow readline */
-ssize_t read_line(int connFd, char *usrbuf, size_t maxlen) {
-    int n;
-    char c, *bufp = usrbuf;
-
-    for (n = 1; n < maxlen; n++) {
-        int numRead;
-        if ((numRead = read(connFd, &c, 1)) == 1) {
-            *bufp++ = c;
-            if (c == '\n') { n++; break; }
-        }
-        else if (numRead == 0) { break; } /* EOF */
-        else return -1;	  /* Error */
-    }
-    *bufp = '\0';
-    return n-1;
 }

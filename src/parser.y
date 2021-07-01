@@ -8,7 +8,7 @@
 #include "parse.h"
 
 /* Define YACCDEBUG to enable debug messages for this lex file */
-//#define YACCDEBUG
+// #define YACCDEBUG
 #define YYERROR_VERBOSE
 #ifdef YACCDEBUG
 #include <stdio.h>
@@ -209,6 +209,7 @@ request_header: token ows t_colon ows text ows t_crlf {
     strcpy(parsing_request->headers[parsing_request->header_count].header_name, $1);
 	strcpy(parsing_request->headers[parsing_request->header_count].header_value, $5);
 	parsing_request->header_count++;
+	parsing_request->headers = (Request_header *) realloc(parsing_request->headers, (1+(parsing_request->header_count)) * sizeof(Request_header));
 };
 
 
@@ -218,7 +219,10 @@ request_header: token ows t_colon ows text ows t_crlf {
  * 2616.  All the best!
  *
  */
-request: request_line request_header t_crlf{
+request_headers: request_headers request_header {}
+          | {};    /* Request headers can be empty */
+
+request: request_line request_headers t_crlf{
 	YPRINTF("parsing_request: Matched Success.\n");
 	return SUCCESS;
 };
